@@ -1,5 +1,43 @@
 // API functions for GoPeopleAuthHeader component
 
+// Builds the Error thrown for a failed GoPeople auth call. The message keeps the
+// historical "HTTP <status>: <statusText>" shape (callers match on it); the
+// backend's `{ error, type }` body is attached as err.type / err.serverMessage.
+const buildAuthError = async (response) => {
+  const errorData = await response.json().catch(() => ({}));
+  const err = new Error(`HTTP ${response.status}: ${response.statusText}`);
+  err.status = response.status;
+  err.type = (errorData && errorData.type) || null;
+  err.serverMessage =
+    (errorData && (errorData.error || errorData.message)) || null;
+  return err;
+};
+
+// Optional delivery channel for request-reset / login-with-otp/initiate.
+// Without a channel the body is exactly `{ identifier }`, as before.
+const buildOTPRequestBody = (identifier, options = {}) => {
+  const body = { identifier };
+  if (options.channel) body.channel = options.channel;
+  if (options.channel === "sms" && options.phone) body.phone = options.phone;
+  return body;
+};
+
+// Returns { sms_available: boolean, masked_phone?: string } for an email identifier.
+export const getOTPChannels = async (apiBaseUrl, identifier) => {
+  const response = await fetch(`${apiBaseUrl}/auth/otp-channels`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ identifier }),
+  });
+
+  if (response.ok) {
+    return response.json();
+  }
+  throw await buildAuthError(response);
+};
+
 export const initiateAuth = async (
   apiBaseUrl,
   identifier,
@@ -73,7 +111,8 @@ export const initiateOTPLogin = async (
   apiBaseUrl,
   identifier,
   appName = "tamtam",
-  language = "fr"
+  language = "fr",
+  options = {} // { channel?: "email" | "sms", phone?: string }
 ) => {
   const queryParams = new URLSearchParams();
   if (appName) queryParams.append("app_name", appName);
@@ -88,23 +127,16 @@ export const initiateOTPLogin = async (
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ identifier }),
+    body: JSON.stringify(buildOTPRequestBody(identifier, options)),
   });
 
   if (response.ok) {
     const data = await response.json();
     return data;
   } else {
-    try {
-      const errorData = await response.json();
-      throw new Error(
-        errorData.message ||
-          errorData.error ||
-          `HTTP ${response.status}: ${response.statusText}`
-      );
-    } catch (jsonError) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+    // Same message as before ("HTTP <status>: <statusText>"), plus err.type
+    // (e.g. PHONE_MISMATCH, SMS_UNAVAILABLE) and err.status.
+    throw await buildAuthError(response);
   }
 };
 
@@ -172,7 +204,8 @@ export const requestPasswordReset = async (
   apiBaseUrl,
   identifier,
   appName = "tamtam",
-  language = "fr"
+  language = "fr",
+  options = {} // { channel?: "email" | "sms", phone?: string }
 ) => {
   const queryParams = new URLSearchParams();
   if (appName) queryParams.append("app_name", appName);
@@ -187,23 +220,16 @@ export const requestPasswordReset = async (
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ identifier }),
+    body: JSON.stringify(buildOTPRequestBody(identifier, options)),
   });
 
   if (response.ok) {
     const data = await response.json();
     return data;
   } else {
-    try {
-      const errorData = await response.json();
-      throw new Error(
-        errorData.message ||
-          errorData.error ||
-          `HTTP ${response.status}: ${response.statusText}`
-      );
-    } catch (jsonError) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+    // Same message as before ("HTTP <status>: <statusText>"), plus err.type
+    // (e.g. PHONE_MISMATCH, SMS_UNAVAILABLE) and err.status.
+    throw await buildAuthError(response);
   }
 };
 

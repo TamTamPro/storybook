@@ -232,3 +232,83 @@ export const SetPasswordAfterReset = () => (
     }}
   />
 );
+
+// Mocked backend for the "receive the code by email or SMS" flow (no GoPeople
+// server needed). Use "Forgot?" or "Continue without password" with:
+//   sms@example.com     → SMS offered (****61); the right number is 0470123461
+//   nophone@example.com → no mobile: email only + "contact your admin" help line
+//   old@example.com     → otp-channels returns 404 (older backend): email only
+// After 5 wrong numbers, SMS requests get a 429 (the backend caps SMS requests per account per hour).
+// Any 6-digit code is rejected by the mocked verify-otp.
+const MOCK_API = "http://mock-gopeople.local";
+const MOCK_PHONE_DIGITS = "0470123461";
+let mockPhoneMismatches = 0;
+
+const mockJson = (status, body) =>
+  Promise.resolve(
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+const installOtpChannelFetchMock = () => {
+  if (window.__otpChannelFetchMock) return;
+  const realFetch = window.fetch.bind(window);
+  window.__otpChannelFetchMock = true;
+  window.fetch = (input, init = {}) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.startsWith(MOCK_API)) return realFetch(input, init);
+    const path = url.slice(MOCK_API.length).split("?")[0];
+    const body = init.body ? JSON.parse(init.body) : {};
+    console.log("[mock GoPeople]", path, { ...body, phone: undefined });
+
+    if (path === "/auth/initiate")
+      return Promise.resolve(new Response(null, { status: 202 }));
+    if (path === "/auth/otp-channels") {
+      if (body.identifier === "sms@example.com")
+        return mockJson(200, { sms_available: true, masked_phone: "****61" });
+      if (body.identifier === "old@example.com")
+        return mockJson(404, { error: "not found" });
+      return mockJson(200, { sms_available: false });
+    }
+    if (
+      path === "/auth/request-reset" ||
+      path === "/auth/login-with-otp/initiate"
+    ) {
+      if (body.channel === "sms") {
+        if (body.identifier !== "sms@example.com")
+          return mockJson(400, { error: "no mobile", type: "SMS_UNAVAILABLE" });
+        if (mockPhoneMismatches >= 5)
+          return mockJson(429, {
+            error: "too many attempts",
+            type: "TOO_MANY_REQUESTS",
+          });
+        const digits = String(body.phone || "").replace(/\D/g, "");
+        if (!digits.endsWith(MOCK_PHONE_DIGITS.slice(1))) {
+          mockPhoneMismatches += 1;
+          return mockJson(400, {
+            error: "phone mismatch",
+            type: "PHONE_MISMATCH",
+          });
+        }
+      }
+      return mockJson(200, { status: "OTP_SENT", message: "OTP sent" });
+    }
+    if (path === "/auth/verify-otp")
+      return mockJson(400, { error: "invalid code", type: "INVALID_OTP" });
+    return mockJson(404, { error: "not mocked" });
+  };
+};
+
+export const OTPChannelChoiceMocked = () => {
+  installOtpChannelFetchMock();
+  const language = select("Language", ["fr", "en", "nl"], "fr");
+  return (
+    <GoPeopleAuthHeader
+      apiBaseUrl={MOCK_API}
+      lng={language}
+      onError={(error) => console.log("onError:", error.type, error)}
+    />
+  );
+};

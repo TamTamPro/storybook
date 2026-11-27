@@ -196,6 +196,21 @@ export const I18N = {
       enterResetCode: "Enter reset code",
       verifyResetCode: "Verify reset code",
       resetCodeMessage: "Please enter the 6-digit code sent to your email",
+      otpChannelTitle: "How would you like to receive your code?",
+      otpChannelEmail: "By email to",
+      otpChannelSms: "By SMS to",
+      otpPhoneConfirmLabel:
+        "For your security, type your full mobile phone number",
+      otpPhoneMismatch: "This number doesn't match the one on your account",
+      otpPhoneTooManyAttempts:
+        "Too many SMS requests. Choose email to receive your code now, or try SMS again later.",
+      otpSmsUnavailable:
+        "SMS is not available right now. The code is sent by email.",
+      otpSentBySmsMessage: "Please enter the 6-digit code sent by SMS to",
+      otpNoPhoneHelp:
+        "If you don't receive the code by email, contact your administrator to add a mobile phone number to your account. You will then be able to receive the code by SMS.",
+      sendCode: "Send code",
+      resendCode: "Resend code",
       phone_conflict:
         "Phone number already exists. Please use a different phone number.",
       email_already_exists: "This email address is already registered",
@@ -460,6 +475,23 @@ export const I18N = {
       verifyResetCode: "Vérifier le code de réinitialisation",
       resetCodeMessage:
         "Veuillez entrer le code à 6 chiffres envoyé à votre email",
+      otpChannelTitle: "Comment souhaitez-vous recevoir votre code ?",
+      otpChannelEmail: "Par e-mail à",
+      otpChannelSms: "Par SMS au",
+      otpPhoneConfirmLabel:
+        "Pour votre sécurité, saisissez votre numéro de mobile complet",
+      otpPhoneMismatch:
+        "Ce numéro ne correspond pas à celui enregistré sur votre compte",
+      otpPhoneTooManyAttempts:
+        "Trop de demandes par SMS. Choisissez l'e-mail pour recevoir votre code maintenant, ou réessayez par SMS plus tard.",
+      otpSmsUnavailable:
+        "Le SMS n'est pas disponible pour le moment. Le code est envoyé par e-mail.",
+      otpSentBySmsMessage:
+        "Veuillez entrer le code à 6 chiffres envoyé par SMS au",
+      otpNoPhoneHelp:
+        "Si vous ne recevez pas le code par e-mail, contactez votre administrateur pour ajouter un numéro de mobile à votre compte. Vous pourrez ensuite recevoir le code par SMS.",
+      sendCode: "Envoyer le code",
+      resendCode: "Renvoyer le code",
       phone_conflict:
         "Ce numéro de téléphone existe déjà. Veuillez utiliser un autre numéro de téléphone.",
       email_already_exists: "Cette adresse email est déjà enregistrée",
@@ -725,6 +757,23 @@ export const I18N = {
       verifyResetCode: "Verifieer resetcode",
       resetCodeMessage:
         "Voer de 6-cijferige code in die naar uw e-mail is gestuurd",
+      otpChannelTitle: "Hoe wilt u uw code ontvangen?",
+      otpChannelEmail: "Per e-mail naar",
+      otpChannelSms: "Per sms naar",
+      otpPhoneConfirmLabel:
+        "Voer voor uw veiligheid uw volledige gsm-nummer in",
+      otpPhoneMismatch:
+        "Dit nummer komt niet overeen met het nummer van uw account",
+      otpPhoneTooManyAttempts:
+        "Te veel sms-aanvragen. Kies e-mail om uw code nu te ontvangen, of probeer het later opnieuw per sms.",
+      otpSmsUnavailable:
+        "Sms is momenteel niet beschikbaar. De code wordt per e-mail verzonden.",
+      otpSentBySmsMessage:
+        "Voer de 6-cijferige code in die per sms is gestuurd naar",
+      otpNoPhoneHelp:
+        "Ontvangt u de code niet per e-mail? Neem contact op met uw beheerder om een gsm-nummer aan uw account toe te voegen. Daarna kunt u de code per sms ontvangen.",
+      sendCode: "Code verzenden",
+      resendCode: "Code opnieuw verzenden",
       phone_conflict:
         "Dit telefoonnummer bestaat al. Gebruik een ander telefoonnummer.",
       email_conflict:

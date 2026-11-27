@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Modal from "react-modal";
 import ReactCodeInput from "react-code-input";
 
@@ -14,6 +14,7 @@ import {
   verifyOTP,
   requestPasswordReset,
   initiateOTPLogin,
+  getOTPChannels,
   setPassword as setPasswordAPI,
 } from "./api"; // API functions for authentication flows: alias setPassword to setPasswordAPI to avoid naming conflict
 import {
@@ -23,6 +24,8 @@ import {
   normalizeAuthData,
 } from "./utils";
 import styles from "./GoPeopleAuthHeader.module.scss";
+
+const RESEND_COOLDOWN_MS = 30000;
 
 const GoPeopleAuthHeader = ({
   apiUrl = "http://local.api.tamtam.pro",
@@ -47,6 +50,18 @@ const GoPeopleAuthHeader = ({
   const [userId, setUserId] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isLoginWithoutPassword, setIsLoginWithoutPassword] = useState(false);
+
+  // Code delivery channel for "forgot password" and "log in with a code".
+  const [codePurpose, setCodePurpose] = useState(null); // "RESET" | "LOGIN"
+  const [smsAvailable, setSmsAvailable] = useState(null); // null = unknown (otp-channels unavailable)
+  const [maskedPhone, setMaskedPhone] = useState("");
+  const [codeChannel, setCodeChannel] = useState("email"); // "email" | "sms"
+  const [smsPhone, setSmsPhone] = useState("");
+  const [phoneError, setPhoneError] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(false);
+  const resendTimer = useRef(null);
+  // Bumped whenever the code flow restarts, so a late otp-channels reply is ignored.
+  const codeRequestSeq = useRef(0);
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -90,6 +105,29 @@ const GoPeopleAuthHeader = ({
     }
   }, []);
 
+  const resetCodeChannelState = () => {
+    setCodePurpose(null);
+    setSmsAvailable(null);
+    setMaskedPhone("");
+    setCodeChannel("email");
+    setSmsPhone("");
+    setPhoneError("");
+    codeRequestSeq.current += 1;
+    clearTimeout(resendTimer.current);
+    setResendCooldown(false);
+  };
+
+  const startResendCooldown = () => {
+    clearTimeout(resendTimer.current);
+    setResendCooldown(true);
+    resendTimer.current = setTimeout(
+      () => setResendCooldown(false),
+      RESEND_COOLDOWN_MS
+    );
+  };
+
+  useEffect(() => () => clearTimeout(resendTimer.current), []);
+
   const handleCloseModal = async (currentStep, currentAuthToken) => {
     if (currentStep === "SET_PASSWORD" && currentAuthToken) {
       await handleAuthSuccess({
@@ -115,6 +153,7 @@ const GoPeopleAuthHeader = ({
       hasSpecial: false,
     });
     setHasPassword(false);
+    resetCodeChannelState();
     setErrors({
       identifier: "",
       password: "",
@@ -356,6 +395,7 @@ const GoPeopleAuthHeader = ({
 
     setLoading(true);
     setErrors({ ...errors, identifier: "" });
+    resetCodeChannelState();
 
     try {
       const appName = app?.name || "tamtam";
@@ -493,7 +533,37 @@ const GoPeopleAuthHeader = ({
     }
   };
 
-  const handleContinueWithoutPassword = async () => {
+  // Handles the errors of a channel:"sms" request. Returns true when handled.
+  // On SMS_UNAVAILABLE the code is sent by email instead (email-only view).
+  // A 429 means too many wrong numbers for this account: email still works.
+  const handleSmsError = async (error, channel, sendByEmail) => {
+    if (channel !== "sms" || !error) return false;
+    if (error.type === "PHONE_MISMATCH") {
+      setPhoneError(I18N[lng].auth.otpPhoneMismatch);
+      // On a resend the phone field is not on screen.
+      if (step !== "CODE_CHANNEL") Toast.error(I18N[lng].auth.otpPhoneMismatch);
+      if (onError) onError(error);
+      return true;
+    }
+    if (error.status === 429) {
+      setPhoneError(I18N[lng].auth.otpPhoneTooManyAttempts);
+      Toast.error(I18N[lng].auth.otpPhoneTooManyAttempts);
+      if (onError) onError(error);
+      return true;
+    }
+    if (error.type === "SMS_UNAVAILABLE") {
+      setSmsAvailable(false);
+      setCodeChannel("email");
+      setSmsPhone("");
+      setPhoneError("");
+      Toast.info(I18N[lng].auth.otpSmsUnavailable);
+      await sendByEmail();
+      return true;
+    }
+    return false;
+  };
+
+  const sendLoginCode = async (channel = "email", phone = "") => {
     setLoading(true);
 
     try {
@@ -502,18 +572,28 @@ const GoPeopleAuthHeader = ({
         apiBaseUrl,
         identifier,
         appName,
-        lng
+        lng,
+        channel === "sms" ? { channel: "sms", phone } : {}
       );
 
       if (response.status === "OTP_SENT" || response.message) {
+        setCodeChannel(channel);
+        setPhoneError("");
+        setErrors((prev) => ({ ...prev, otp: "" }));
+        startResendCooldown();
         setIsLoginWithoutPassword(true); // ← marquer le flow
         setStep("OTP");
+        setOtp("");
         Toast.info(
           I18N[lng].auth.otp_sent || "OTP has been sent to your identifier"
         );
       }
     } catch (error) {
       console.error("Error initiating OTP login:", error);
+
+      if (await handleSmsError(error, channel, () => sendLoginCode("email"))) {
+        return;
+      }
 
       let errorMessage = I18N[lng].auth.error_occurred || "An error occurred";
 
@@ -678,7 +758,7 @@ const GoPeopleAuthHeader = ({
     }
   };
 
-  const handleForgotPassword = async () => {
+  const sendResetCode = async (channel = "email", phone = "") => {
     setLoading(true);
     setErrors({ ...errors, password: "" });
 
@@ -688,10 +768,15 @@ const GoPeopleAuthHeader = ({
         apiBaseUrl,
         identifier,
         appName,
-        lng
+        lng,
+        channel === "sms" ? { channel: "sms", phone } : {}
       );
 
       if (response.status === "OTP_SENT" || response.message) {
+        setCodeChannel(channel);
+        setPhoneError("");
+        setErrors((prev) => ({ ...prev, otp: "" }));
+        startResendCooldown();
         Toast.success(
           I18N[lng].auth.resetCodeSent || "Reset code sent successfully"
         );
@@ -700,6 +785,10 @@ const GoPeopleAuthHeader = ({
       }
     } catch (error) {
       console.error("Error requesting password reset:", error);
+
+      if (await handleSmsError(error, channel, () => sendResetCode("email"))) {
+        return;
+      }
 
       let errorMessage = I18N[lng].auth.error_occurred || "An error occurred";
       const errorString = error.message || "";
@@ -753,6 +842,127 @@ const GoPeopleAuthHeader = ({
       setLoading(false);
     }
   };
+
+  const sendCode = (purpose, channel, phone) =>
+    purpose === "RESET"
+      ? sendResetCode(channel, phone)
+      : sendLoginCode(channel, phone);
+
+  // Entry point for both "forgot password" and "log in with a code".
+  // For an email identifier, asks the backend which channels are available:
+  // SMS available → channel choice step; otherwise (or if the call fails,
+  // e.g. older backend) → email, exactly as before.
+  const requestCode = async (purpose) => {
+    if (loading) return;
+    resetCodeChannelState();
+    setCodePurpose(purpose);
+
+    const isEmailIdentifier =
+      identifier.includes("@") && validateEmail(identifier);
+    if (!isEmailIdentifier) {
+      return sendCode(purpose, "email");
+    }
+
+    setLoading(true);
+    const seq = codeRequestSeq.current;
+    let channels = null;
+    try {
+      channels = await getOTPChannels(apiBaseUrl, identifier);
+    } catch (error) {
+      console.warn("otp-channels unavailable, falling back to email:", error);
+      channels = null;
+    }
+
+    // The modal was closed or the identifier changed while waiting.
+    if (seq !== codeRequestSeq.current) {
+      setLoading(false);
+      return;
+    }
+
+    if (channels && channels.sms_available === true) {
+      setSmsAvailable(true);
+      setMaskedPhone(channels.masked_phone || "");
+      setErrors({ ...errors, password: "" });
+      setLoading(false);
+      setStep("CODE_CHANNEL");
+      return;
+    }
+    if (channels && channels.sms_available === false) {
+      setSmsAvailable(false);
+    }
+    return sendCode(purpose, "email");
+  };
+
+  const handleForgotPassword = () => requestCode("RESET");
+
+  const handleContinueWithoutPassword = () => requestCode("LOGIN");
+
+  const handleCodeChannelSubmit = () => {
+    if (loading) return;
+    if (codeChannel !== "sms") {
+      setPhoneError("");
+      return sendCode(codePurpose, "email");
+    }
+    const phone = smsPhone.trim();
+    if (!phone) {
+      setPhoneError(I18N[lng].auth.required_field);
+      return;
+    }
+    // Looser than validatePhone: Italian, Spanish and Luxembourg mobiles are 9 digits nationally.
+    const digitCount = phone.replace(/\D/g, "").length;
+    if (digitCount < 8 || digitCount > 15) {
+      setPhoneError(I18N[lng].auth.validate_phone);
+      return;
+    }
+    setPhoneError("");
+    return sendCode(codePurpose, "sms", phone);
+  };
+
+  // "Resend code" reuses the channel (and typed number) used for the first send.
+  const handleResendCode = () => {
+    if (loading || !codePurpose || resendCooldown) return;
+    return sendCode(
+      codePurpose,
+      codeChannel,
+      codeChannel === "sms" ? smsPhone.trim() : ""
+    );
+  };
+
+  const renderCodeSentMessage = (emailMessage) => (
+    <>
+      <p className={styles.otpMessage}>
+        {codeChannel === "sms"
+          ? `${I18N[lng].auth.otpSentBySmsMessage} ${maskedPhone}`
+          : `${emailMessage} ${identifier}`}
+      </p>
+      {codeChannel === "email" && smsAvailable === false && (
+        <p className={styles.otpMessage}>{I18N[lng].auth.otpNoPhoneHelp}</p>
+      )}
+    </>
+  );
+
+  const renderResendCodeLink = () =>
+    codePurpose ? (
+      <div className={styles.forgotPasswordLink}>
+        <span
+          className={`${styles.linkText} ${
+            resendCooldown ? styles.linkTextDisabled : ""
+          }`}
+          role="button"
+          tabIndex={resendCooldown ? -1 : 0}
+          aria-disabled={resendCooldown}
+          onClick={handleResendCode}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleResendCode();
+            }
+          }}
+        >
+          {I18N[lng].auth.resendCode}
+        </span>
+      </div>
+    ) : null;
 
   const handleResetOTPVerification = async () => {
     if (!otp || otp.length < 6) {
@@ -1023,9 +1233,7 @@ const GoPeopleAuthHeader = ({
     <div className={styles.loginContent}>
       <h1 className={styles.title}>{I18N[lng].auth.enterOTP}</h1>
 
-      <p className={styles.otpMessage}>
-        {I18N[lng].auth.otpSentMessage} {identifier}
-      </p>
+      {renderCodeSentMessage(I18N[lng].auth.otpSentMessage)}
 
       <div className={styles.codeBox}>
         <ReactCodeInput
@@ -1060,6 +1268,8 @@ const GoPeopleAuthHeader = ({
           </button>
         )}
       </div>
+
+      {isLoginWithoutPassword && renderResendCodeLink()}
     </div>
   );
 
@@ -1279,9 +1489,7 @@ const GoPeopleAuthHeader = ({
         </h1>
       </div>
 
-      <p className={styles.otpMessage}>
-        {I18N[lng].auth.resetCodeMessage} {identifier}
-      </p>
+      {renderCodeSentMessage(I18N[lng].auth.resetCodeMessage)}
 
       <div className={styles.codeBox}>
         <ReactCodeInput
@@ -1316,6 +1524,116 @@ const GoPeopleAuthHeader = ({
             onClick={handleResetOTPVerification}
           >
             {I18N[lng].auth.verifyResetCode}
+          </button>
+        )}
+      </div>
+
+      {renderResendCodeLink()}
+    </div>
+  );
+
+  // A send that failed on CODE_CHANNEL may have set errors.password (reset flow).
+  const backToPasswordStep = () => {
+    setErrors((prev) => ({ ...prev, password: "" }));
+    setStep("PASSWORD");
+  };
+
+  const renderCodeChannelStep = () => (
+    <div className={styles.loginContent}>
+      <div className={styles.titleContainer}>
+        <span className={styles.backButton} onClick={backToPasswordStep}>
+          <svg
+            width="35"
+            height="19"
+            viewBox="0 0 40 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M38 12H10 M10 12L16 6 M10 12L16 18"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <h1
+          id="gp-otp-channel-title"
+          className={styles.title}
+          onClick={backToPasswordStep}
+        >
+          {I18N[lng].auth.otpChannelTitle}
+        </h1>
+      </div>
+
+      <div
+        className={styles.channelOptions}
+        role="radiogroup"
+        aria-labelledby="gp-otp-channel-title"
+      >
+        <label className={styles.channelOption}>
+          <input
+            type="radio"
+            name="otpChannel"
+            value="email"
+            checked={codeChannel === "email"}
+            onChange={() => {
+              setCodeChannel("email");
+              setPhoneError("");
+            }}
+          />
+          <span>
+            {I18N[lng].auth.otpChannelEmail} <strong>{identifier}</strong>
+          </span>
+        </label>
+        {smsAvailable && (
+          <label className={styles.channelOption}>
+            <input
+              type="radio"
+              name="otpChannel"
+              value="sms"
+              checked={codeChannel === "sms"}
+              onChange={() => setCodeChannel("sms")}
+            />
+            <span>
+              {I18N[lng].auth.otpChannelSms} <strong>{maskedPhone}</strong>
+            </span>
+          </label>
+        )}
+      </div>
+
+      {codeChannel === "sms" && (
+        <FormInput
+          name="smsPhone"
+          value={smsPhone}
+          label={I18N[lng].auth.otpPhoneConfirmLabel}
+          error={phoneError}
+          aria-label={I18N[lng].auth.otpPhoneConfirmLabel}
+          aria-invalid={!!phoneError}
+          autoFocus
+          inputMode="tel"
+          autoComplete="tel"
+          className="sb-ttp-input-lg"
+          labelClassName="sb-ttp-label-lg"
+          onChange={(e) => {
+            setSmsPhone(e.target.value);
+            if (phoneError) setPhoneError("");
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleCodeChannelSubmit();
+          }}
+        />
+      )}
+
+      <div className={styles.actions}>
+        {loading ? (
+          <button className={styles.button} disabled>
+            <Loader style={{ height: "10px" }} color={"#fff"} />
+          </button>
+        ) : (
+          <button className={styles.button} onClick={handleCodeChannelSubmit}>
+            {I18N[lng].auth.sendCode}
           </button>
         )}
       </div>
@@ -1364,6 +1682,7 @@ const GoPeopleAuthHeader = ({
           {step === "OTP" && renderOTPStep()}
           {step === "SET_PASSWORD" && renderSetPasswordStep()}
           {step === "RESET_OTP" && renderResetOTPStep()}
+          {step === "CODE_CHANNEL" && renderCodeChannelStep()}
         </div>
       </Modal>
 
